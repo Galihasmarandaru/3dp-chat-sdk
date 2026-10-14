@@ -20,34 +20,42 @@ public class AttachmentManager {
             jsonString = convertDataToJson(data: dataUser as Any)
         }
         
-        let mediaImage: DolphinMessage = preRenderFileMessage(token: token, sessionId: sessionId, dolphinProfile: dolphinProfile, fileNsUrl: fileNsUrl!, state: state)
-        let url = URL(string: "\(baseUrl)/webchat/upload")
+        guard let fileNsUrl = fileNsUrl, let url = URL(string: "\(baseUrl)/webchat/upload") else {
+            return
+        }
+        
+        let mediaImage: DolphinMessage = preRenderFileMessage(token: token, sessionId: sessionId, dolphinProfile: dolphinProfile, fileNsUrl: fileNsUrl, state: state)
         let boundary = "--------------\(UUID().uuidString)"
         let session = URLSession.shared
         let mimeType = getMimeByState(state: state)
-        var data: Data = convertToDataByMime(fileNsUrl: fileNsUrl!, mimeType: mimeType)
-        let fileName: String = (fileNsUrl?.lastPathComponent)!
+        let fileData = convertToDataByMime(fileNsUrl: fileNsUrl, mimeType: mimeType)
+        let fileName = fileNsUrl.lastPathComponent ?? "file"
         
-        var urlRequest = URLRequest(url: url!)
+        var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
 
         urlRequest.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
-        data.append("\r\n--\(boundary)\r\n".data(using: .utf8)!)
-        data.append("content-disposition: form-data; name=\"attachment\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
-        data.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
-        data.append(data)
+        var body = Data()
+        if let partHeader = "\r\n--\(boundary)\r\ncontent-disposition: form-data; name=\"attachment\"; filename=\"\(fileName)\"\r\nContent-Type: \(mimeType)\r\n\r\n".data(using: .utf8) {
+            body.append(partHeader)
+        }
+        body.append(fileData)
     
-        data.append("\r\n--\(boundary)\r\n".data(using: .utf8)!)
-        data.append("content-disposition: form-data; name=\"sessionId\"\r\n\r\n".data(using: .utf8)!)
-        data.append("\(String(describing: sessionId))\r\n".data(using: .utf8)!)
-        data.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        if let sid = sessionId, !sid.isEmpty {
+            if let sidPart = "\r\n--\(boundary)\r\ncontent-disposition: form-data; name=\"sessionId\"\r\n\r\n\(sid)\r\n".data(using: .utf8) {
+                body.append(sidPart)
+            }
+        }
+        if let closingBoundary = "--\(boundary)--\r\n".data(using: .utf8) {
+            body.append(closingBoundary)
+        }
         
-        session.uploadTask(with: urlRequest, from: data, completionHandler: { [weak self] responseData, response, error in
+        session.uploadTask(with: urlRequest, from: body, completionHandler: { [weak self] responseData, response, error in
             guard let self = self else { return }
-            if error != nil {
-                print(error as Any)
+            if let error = error {
+                print("Attachment upload error:", error)
             }
             if let response = response as? HTTPURLResponse {
                 print("statusCode: \(response.statusCode)")
@@ -57,30 +65,26 @@ public class AttachmentManager {
                 return
             }
             if let responseString = String(data: responseData, encoding: .utf8) {
-                print("response", responseString)
                 if responseString.contains("You can not upload") {
-                } else {
-                    let decodedData = Data(base64Encoded: responseString)
+                    print("Upload forbidden by server")
+                } else if let decodedData = Data(base64Encoded: responseString) {
                     do {
-                        let jsonObject = try JSONSerialization.jsonObject(with: decodedData!, options: .allowFragments) as! NSDictionary
-
-                        if jsonObject["message"] != nil {
-                            if (jsonObject["message"] as! String) == "Filesize limit exceeded" {
+                        if let jsonObject = try JSONSerialization.jsonObject(with: decodedData, options: .allowFragments) as? [String: Any] {
+                            if let message = jsonObject["message"] as? String, message == "Filesize limit exceeded" {
                                 DispatchQueue.main.async {
                                     NotificationCenter.default.post(name: Notification.Name(rawValue: notificationConnectionStatus), object: 6)
                                 }
+                            } else {
+                                mediaImage.attFilepath = jsonObject["filepath"] as? String
+                                mediaImage.attFilename = jsonObject["filename"] as? String
+                                mediaImage.attFiletype = jsonObject["filetype"] as? String
+                                mediaImage.attUrl = self.getAttachmentURL(baseUrl: baseUrl, json: jsonObject as NSDictionary)
+                                mediaImage.preCustomVar = jsonString
+                                onSend(mediaImage)
                             }
-                        } else {
-                            mediaImage.attFilepath = (jsonObject["filepath"] as! String)
-                            mediaImage.attFilename = (jsonObject["filename"] as! String)
-                            mediaImage.attFiletype = (jsonObject["filetype"] as! String)
-                            mediaImage.attUrl = self.getAttachmentURL(baseUrl: baseUrl, json: jsonObject)
-                            mediaImage.preCustomVar = jsonString
-                            onSend(mediaImage)
-                            print(jsonObject)
                         }
                     } catch let parsingError {
-                        print("Error parsing upload response", parsingError)
+                        print("Error parsing upload response:", parsingError)
                     }
                 }
             }

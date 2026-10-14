@@ -48,6 +48,7 @@ public class AESEncryption {
         decryptedMessage = decryptMessagePart2(decryptMessage: decryptedMessage, messageToDec: messageToDec, key: cipherKey)
         decryptedMessage = decryptFile(decryptMessage: decryptedMessage, messageToDec: messageToDec, key: cipherKey)
 
+        decryptedMessage.id = messageToDec.id ?? decryptedMessage.transactionId
         decryptedMessage.inbound = messageToDec.inbound
         decryptedMessage.outbound = messageToDec.outbound
         decryptedMessage.disconnect = messageToDec.disconnect
@@ -62,6 +63,12 @@ public class AESEncryption {
         decryptedMessage.summary = messageToDec.summary
         decryptedMessage.displayMessage = messageToDec.displayMessage
         decryptedMessage.documentId = messageToDec.documentId
+        decryptedMessage.carouselItems = messageToDec.carouselItems
+        decryptedMessage.actionButtons = messageToDec.actionButtons
+        decryptedMessage.knowledgeSources = messageToDec.knowledgeSources
+        decryptedMessage.reaction = messageToDec.reaction
+        decryptedMessage.deeplinkUrl = messageToDec.deeplinkUrl
+        decryptedMessage.isFavorite = messageToDec.isFavorite
         
         return decryptedMessage
 
@@ -268,11 +275,6 @@ public class AESEncryption {
         }
     }
     
-    /// Generate random string based on length
-    public static func randomString(length: Int) -> String {
-        let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        return String((0..<length).map { _ in letters.randomElement()! })
-    }
     
     /// Encrypt given data
     public static func encrypt(message: String, accessToken: String, iv: Array<UInt8>, key: Array<UInt8>) -> String {

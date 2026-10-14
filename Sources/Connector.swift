@@ -12,16 +12,6 @@ import UIKit
 
 public class Connector: StompClientLibDelegate {
     
-    static var MESSAGE_TYPE_TEXT = "text"
-    static var MESSAGE_TYPE_OPTIONS = "options"
-    static var MESSAGE_TYPE_BUTTON = "buttons"
-    static var MESSAGE_TYPE_IMAGE = "image"
-    static var MESSAGE_TYPE_INCOMING = "incoming"
-    static var MESSAGE_TYPE_OUTGOING = "outgoing"
-    
-    let topic_ACK: String = "/topic/ack-"
-    let topic_messageEndpoint: String = "/topic/message-"
-    let destinationUrl = "/app/wmessage"
     
     public var baseUrl: String = ""
     public var clientId: String = ""
@@ -132,12 +122,12 @@ public class Connector: StompClientLibDelegate {
         } else if let generativeBaseUrl = generativeBaseUrl, !generativeBaseUrl.isEmpty {
             self.graphAuthUrl = "\(generativeBaseUrl)/dolphin/apiv1/graph/auth"
         }
-        if let graphUsername = graphUsername, !graphUsername.isEmpty {
-            self.graphUsername = graphUsername
-        }
-        if let graphPassword = graphPassword, !graphPassword.isEmpty {
-            self.graphPassword = graphPassword
-        }
+       if let graphUsername = graphUsername, !graphUsername.isEmpty {
+           self.graphUsername = graphUsername
+       }
+       if let graphPassword = graphPassword, !graphPassword.isEmpty {
+           self.graphPassword = graphPassword
+       }
     }
     
     /*
@@ -439,16 +429,18 @@ public class Connector: StompClientLibDelegate {
         completion: ((_ success: Bool) -> Void)? = nil
     ) {
         let cid = self.currentConversationId
+        let currentSid = self.sessionId
         doDisconnectToWs()
-        socketManager.sessionId = nil
         
         if !turnsToSave.isEmpty {
-            saveConversationTurns(turns: turnsToSave, conversationId: cid) { [weak self] allSucceeded in
+            saveConversationTurns(turns: turnsToSave, conversationId: cid, sessionId: currentSid) { [weak self] allSucceeded in
+                self?.socketManager.sessionId = nil
                 self?.startNewConversation()
                 print("Session ended and saved \(turnsToSave.count) turn(s) to conversation \(cid).")
                 completion?(allSucceeded)
             }
         } else {
+            socketManager.sessionId = nil
             startNewConversation()
             print("Session ended.")
             completion?(true)
@@ -543,20 +535,50 @@ public class Connector: StompClientLibDelegate {
     }
     
     public func saveConversationTurns(
-        turns: [(question: String, answer: String)],
+        turns: [(question: String, answer: String)] = [],
         conversationId: String? = nil,
+        sessionId: String? = nil,
+        botId: String? = nil,
+        topic: String? = nil,
         completion: ((_ allSucceeded: Bool) -> Void)? = nil
     ) {
-        guard !turns.isEmpty else {
-            completion?(true)
+        let cid = (conversationId != nil && !conversationId!.isEmpty) ? conversationId! : self.currentConversationId
+        let sid = (sessionId != nil && !sessionId!.isEmpty) ? sessionId! : (self.sessionId ?? "")
+        let bid = (botId != nil && !botId!.isEmpty) ? botId! : self.botId
+        
+        // Inisialisasi percakapan baru jika turns masih kosong
+        if turns.isEmpty {
+            let resolvedTopic: String
+            if let t = topic, !t.isEmpty {
+                resolvedTopic = t
+            } else {
+                let dateFormatter = DateFormatter()
+                dateFormatter.locale = Locale(identifier: "id_ID")
+                dateFormatter.dateFormat = "d MMMM yyyy Jam saat ini: HH:mm:ss"
+                let dateStr = dateFormatter.string(from: Date())
+                resolvedTopic = "Tanggal hari ini: \(dateStr) Percakapan Baru"
+            }
+            
+            createGenerativeChat(
+                question: "",
+                answer: "",
+                conversationId: cid,
+                firstChat: true,
+                topic: resolvedTopic,
+                sessionId: sid,
+                botId: bid
+            ) { success, _ in
+                completion?(success)
+            }
             return
         }
         
-        let cid = (conversationId != nil && !conversationId!.isEmpty) ? conversationId! : self.currentConversationId
+        // Simpan seluruh turn secara serial berurutan
+        var allSuccess = true
         
         func sendNext(index: Int) {
             guard index < turns.count else {
-                completion?(true)
+                completion?(allSuccess)
                 return
             }
             
@@ -567,8 +589,14 @@ public class Connector: StompClientLibDelegate {
                 question: turn.question,
                 answer: turn.answer,
                 conversationId: cid,
-                firstChat: isFirst
-            ) { _, _ in
+                firstChat: isFirst,
+                topic: (isFirst ? topic : nil),
+                sessionId: sid,
+                botId: bid
+            ) { success, _ in
+                if !success {
+                    allSuccess = false
+                }
                 sendNext(index: index + 1)
             }
         }
@@ -887,8 +915,5 @@ public class Connector: StompClientLibDelegate {
         }
     }
 
-    public func fetchHistories(completion: @escaping ([[String: Any]]) -> Void) {
-        fetchConversations(completion: completion)
-    }
 }
 

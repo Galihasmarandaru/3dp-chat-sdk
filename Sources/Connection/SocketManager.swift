@@ -38,9 +38,12 @@ public class SocketManager: NSObject, StompClientLibDelegate {
             let index = baseUrl.index(baseUrl.startIndex, offsetBy: 8)
             cutHttp = String(baseUrl[index...])
         }
-        print("current access", accessToken)
         let completedWSURL = "wss://\(cutHttp)/webchat/websocket?access_token=\(accessToken)"
-        socketUrl = NSURL(string: completedWSURL)!
+        guard let url = NSURL(string: completedWSURL) else {
+            print("Invalid socket URL: \(completedWSURL)")
+            return
+        }
+        socketUrl = url
         
         print("socketUrl", socketUrl)
         token = (dolphinProfile.name ?? "") + (dolphinProfile.email ?? "") + (dolphinProfile.phoneNumber ?? "") + (dolphinProfile.uid ?? "")
@@ -161,12 +164,14 @@ public class SocketManager: NSObject, StompClientLibDelegate {
         if !(dolphinProfile.customerId ?? "").isEmpty {
             socialid = dolphinProfile.customerId!
         }
-        let url = URL(string: baseUrl + "/webchat/conversation?contactid=\(socialid)&access_token=\(accessToken)")!
+        guard let url = URL(string: "\(baseUrl)/webchat/conversation?contactid=\(socialid)&access_token=\(accessToken)") else {
+            return
+        }
         var request = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 10)
         request.httpMethod = "GET"
         
-        let dataTask = URLSession.shared.dataTask(with: request, completionHandler: { data, response, error in
-            guard let data = data, error == nil else {
+        let dataTask = URLSession.shared.dataTask(with: request, completionHandler: { [weak self] data, response, error in
+            guard let self = self, let data = data, error == nil else {
                 print(error?.localizedDescription ?? "No Data")
                 return
             }
@@ -178,47 +183,25 @@ public class SocketManager: NSObject, StompClientLibDelegate {
                 chatHistories.reverse()
                 DispatchQueue.main.async {
                     for chatMessage in chatHistories {
-                        if chatMessage.message != nil && chatMessage.message != "" {
+                        if let msg = chatMessage.message, !msg.isEmpty {
                             let dolphinMessage = DolphinMessage.parsingHistoryToMessage(chatMessage: chatMessage, state: Constants.message)
                             NotificationCenter.default.post(name: Notification.Name(rawValue: notificationMessage), object: dolphinMessage)
                         } else {
-                            var attachmentUrl: String = baseUrl
-                            if chatMessage.documentLink != nil {
-                                let filename = chatMessage.documentLink!.parsingData()
-                                if chatMessage.accountName != dolphinProfile.name {
-                                    attachmentUrl = attachmentUrl + "/webchat/out/document/" + filename + "?access_token=\(accessToken)"
-                                } else {
-                                    attachmentUrl = attachmentUrl + "/webchat/in/document/" + filename + "?access_token=\(accessToken)"
-                                }
-                                let dolphinMessage: DolphinMessage = DolphinMessage.parsingHistoryToMessage(chatMessage: chatMessage, filename: filename, attachmentUrl: attachmentUrl, state: Constants.document)
-                                NotificationCenter.default.post(name: Notification.Name(rawValue: notificationMessage), object: dolphinMessage)
-                            } else if chatMessage.videoLink != nil {
-                                let filename = chatMessage.videoLink!.parsingData()
-                                if chatMessage.accountName != dolphinProfile.name {
-                                    attachmentUrl = attachmentUrl + "/webchat/out/video/" + filename + "?access_token=\(accessToken)"
-                                } else {
-                                    attachmentUrl = attachmentUrl + "/webchat/in/video/" + filename + "?access_token=\(accessToken)"
-                                }
-                                let dolphinMessage: DolphinMessage = DolphinMessage.parsingHistoryToMessage(chatMessage: chatMessage, filename: filename, attachmentUrl: attachmentUrl, state: Constants.video)
-                                NotificationCenter.default.post(name: Notification.Name(rawValue: notificationMessage), object: dolphinMessage)
-                            } else if chatMessage.audioLink != nil {
-                                let filename = chatMessage.audioLink!.parsingData()
-                                if chatMessage.accountName != dolphinProfile.name {
-                                    attachmentUrl = attachmentUrl + "/webchat/out/audio/" + filename + "?access_token=\(accessToken)"
-                                } else {
-                                    attachmentUrl = attachmentUrl + "/webchat/in/audio/" + filename + "?access_token=\(accessToken)"
-                                }
-                                let dolphinMessage: DolphinMessage = DolphinMessage.parsingHistoryToMessage(chatMessage: chatMessage, filename: filename, attachmentUrl: attachmentUrl, state: Constants.audio)
-                                NotificationCenter.default.post(name: Notification.Name(rawValue: notificationMessage), object: dolphinMessage)
-                            } else if chatMessage.pictureLink != nil {
-                                let filename = chatMessage.pictureLink!.parsingData()
-                                if chatMessage.accountName != dolphinProfile.name {
-                                    attachmentUrl = attachmentUrl + "/webchat/out/image/" + filename + "?access_token=\(accessToken)"
-                                } else {
-                                    attachmentUrl = attachmentUrl + "/webchat/in/image/" + filename + "?access_token=\(accessToken)"
-                                }
-                                let dolphinMessage: DolphinMessage = DolphinMessage.parsingHistoryToMessage(chatMessage: chatMessage, filename: filename, attachmentUrl: attachmentUrl, state: Constants.image)
-                                NotificationCenter.default.post(name: Notification.Name(rawValue: notificationMessage), object: dolphinMessage)
+                            let dolphinMessage: DolphinMessage?
+                            if let link = chatMessage.documentLink {
+                                dolphinMessage = self.parseAttachmentMessage(chatMessage: chatMessage, link: link, type: "document", state: Constants.document, baseUrl: baseUrl, accessToken: accessToken, userName: dolphinProfile.name)
+                            } else if let link = chatMessage.videoLink {
+                                dolphinMessage = self.parseAttachmentMessage(chatMessage: chatMessage, link: link, type: "video", state: Constants.video, baseUrl: baseUrl, accessToken: accessToken, userName: dolphinProfile.name)
+                            } else if let link = chatMessage.audioLink {
+                                dolphinMessage = self.parseAttachmentMessage(chatMessage: chatMessage, link: link, type: "audio", state: Constants.audio, baseUrl: baseUrl, accessToken: accessToken, userName: dolphinProfile.name)
+                            } else if let link = chatMessage.pictureLink {
+                                dolphinMessage = self.parseAttachmentMessage(chatMessage: chatMessage, link: link, type: "image", state: Constants.image, baseUrl: baseUrl, accessToken: accessToken, userName: dolphinProfile.name)
+                            } else {
+                                dolphinMessage = nil
+                            }
+                            
+                            if let message = dolphinMessage {
+                                NotificationCenter.default.post(name: Notification.Name(rawValue: notificationMessage), object: message)
                             }
                         }
                     }
@@ -228,6 +211,26 @@ public class SocketManager: NSObject, StompClientLibDelegate {
             }
         })
         dataTask.resume()
+    }
+    
+    private func parseAttachmentMessage(
+        chatMessage: DolphinChatHistory,
+        link: String,
+        type: String,
+        state: String,
+        baseUrl: String,
+        accessToken: String,
+        userName: String?
+    ) -> DolphinMessage {
+        let filename = link.parsingData()
+        let direction = (chatMessage.accountName != userName) ? "out" : "in"
+        let attachmentUrl = "\(baseUrl)/webchat/\(direction)/\(type)/\(filename)?access_token=\(accessToken)"
+        return DolphinMessage.parsingHistoryToMessage(
+            chatMessage: chatMessage,
+            filename: filename,
+            attachmentUrl: attachmentUrl,
+            state: state
+        )
     }
     
     public func stompClient(client: StompClientLib!, didReceiveMessageWithJSONBody jsonBody: AnyObject?, akaStringBody stringBody: String?, withHeader header: [String : String]?, withDestination destination: String) {
@@ -263,7 +266,7 @@ public class SocketManager: NSObject, StompClientLibDelegate {
     }
     
     public func setEvent(msgDecriypted: DolphinMessage) {
-        if msgDecriypted.event == "diconnect" {
+        if msgDecriypted.event == "diconnect" || msgDecriypted.event == "disconnect" {
             print("User is disconnected")
         } else if msgDecriypted.event == "read" {
             print("read")
@@ -280,16 +283,17 @@ public class SocketManager: NSObject, StompClientLibDelegate {
         incomingMsg.isUser = false
         if incomingMsg.message != nil {
             NotificationCenter.default.post(name: Notification.Name(rawValue: notificationMessage), object: incomingMsg)
-        } else {
+        } else if let rawAttUrl = incomingMsg.attUrl {
             let connector = Connector.shared
-            incomingMsg.attUrl = connector.getUrlFile(url: incomingMsg.attUrl!)
-            if incomingMsg.attUrl != nil && (incomingMsg.attFiletype!.contains(Constants.image)) {
+            incomingMsg.attUrl = connector.getUrlFile(url: rawAttUrl)
+            let fileType = incomingMsg.attFiletype ?? ""
+            if fileType.contains(Constants.image) {
                 connector.setIncomingFileTypeAndState(message: incomingMsg, state: Constants.image)
-            } else if incomingMsg.attUrl != nil && (incomingMsg.attFiletype!.contains(Constants.video)) || (incomingMsg.attFiletype!.contains(Connector.CONSTANT_TYPE_OCTET_STREAM)) {
+            } else if fileType.contains(Constants.video) || fileType.contains(Connector.CONSTANT_TYPE_OCTET_STREAM) {
                 connector.setIncomingFileTypeAndState(message: incomingMsg, state: Constants.video)
-            } else if incomingMsg.attUrl != nil && (incomingMsg.attFiletype!.contains(Connector.CONSTANT_TYPE_DOCUMENT) || incomingMsg.attFiletype!.contains(Connector.CONSTANT_TYPE_APPLICATION)) {
+            } else if fileType.contains(Connector.CONSTANT_TYPE_DOCUMENT) || fileType.contains(Connector.CONSTANT_TYPE_APPLICATION) {
                 connector.setIncomingFileTypeAndState(message: incomingMsg, state: Constants.document)
-            } else if incomingMsg.attUrl != nil && incomingMsg.attFiletype!.contains(Connector.CONSTANT_TYPE_AUDIO) {
+            } else if fileType.contains(Connector.CONSTANT_TYPE_AUDIO) {
                 connector.setIncomingFileTypeAndState(message: incomingMsg, state: Constants.audio)
             }
             NotificationCenter.default.post(name: Notification.Name(rawValue: notificationMessage), object: incomingMsg)

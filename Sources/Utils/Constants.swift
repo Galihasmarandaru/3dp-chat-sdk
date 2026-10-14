@@ -11,9 +11,9 @@ public let notificationReadMessage = "com.connector.notificationReadMessage"
 public let notificationTypingCondition = "com.connector.notificationTypingCondition"
 
 public class Constants {
-    public static var video: String = "video"
-    public static var image: String = "image"
-    public static var document: String = "document"
-    public static var message: String = "message"
-    public static var audio: String = "audio"
+    public static let video: String = "video"
+    public static let image: String = "image"
+    public static let document: String = "document"
+    public static let message: String = "message"
+    public static let audio: String = "audio"
 }

@@ -13,14 +13,18 @@ extension String {
     
     func parsingData() -> String {
         let addQuotes = self.replacingOccurrences(of: "'", with: "\"", options: .literal)
-        
-        let data = addQuotes.data(using: String.Encoding.utf8)
-        var dictonary: NSDictionary?
-        do {
-            dictonary = try JSONSerialization.jsonObject(with: data!, options: [.allowFragments]) as? [String: AnyObject] as NSDictionary?
-        } catch let error as NSError {
-            print(error)
+        guard let data = addQuotes.data(using: .utf8) else {
+            return self
         }
-        return dictonary!["filename"]! as! String
+        
+        do {
+            if let dictionary = try JSONSerialization.jsonObject(with: data, options: [.allowFragments]) as? [String: Any],
+               let filename = dictionary["filename"] as? String {
+                return filename
+            }
+        } catch {
+            // Not a JSON dictionary, fallback gracefully
+        }
+        return self
     }
 }
